@@ -29,3 +29,8 @@ Resultado esperado (aproximação, pois depende da data exata do dia):
 - VAEBA BRUTA ≈ R$ 103.000,00
 
 Repita o exemplo para verificar se a interface está operando corretamente.
+
+## Como validar a correção (feminino > masculino)
+1. Abra `index.html` e use os mesmos dados para os dois cálculos, mudando apenas o sexo (ex.: nome qualquer, nascimento 1960-05-10, benefício bruto R$ 8.500,00, rubricas zeradas, competência base 01/2024, data do cálculo = hoje).
+2. Observe a tabela “Diagnóstico äx(12)” no painel lateral: os valores para feminino devem ser maiores que os de masculino nas idades 50, 60, 67 e 80.
+3. Compare os resultados: VAEBA feminina deve ser maior que a masculina para os mesmos inputs (diferença vem do äx(12) calculado por comutação a partir das tábuas IBGE 2024).

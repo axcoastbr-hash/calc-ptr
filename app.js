@@ -25,6 +25,10 @@ const outK = document.getElementById("fatorK");
 const outAlerts = document.getElementById("alerts");
 const auditoriaBox = document.getElementById("auditoria");
 const parecerBox = document.getElementById("parecer");
+const diagContainer = document.getElementById("axDiag");
+
+let computedAx12 = { masc: [], fem: [] };
+let mortalitySource = { masc: "qx_masc", fem: "qx_fem", swapped: false };
 
 function initDefaults() {
   const today = new Date();
@@ -33,6 +37,89 @@ function initDefaults() {
 }
 
 initDefaults();
+buildAx12Tables();
+logAxSanity();
+renderAxDiagnostics();
+
+function ensureOmega(qx) {
+  const arr = [...qx];
+  if (arr.length <= OMEGA) {
+    const missing = OMEGA + 1 - arr.length;
+    for (let i = 0; i < missing; i++) arr.push(arr[arr.length - 1] || 1);
+  }
+  arr[OMEGA] = 1.0;
+  return arr;
+}
+
+function buildAx12FromQx(qx) {
+  const q = ensureOmega(qx);
+  const l = new Array(OMEGA + 1).fill(0);
+  l[0] = 10_000_000;
+  for (let x = 1; x <= OMEGA; x++) {
+    l[x] = l[x - 1] * (1 - q[x - 1]);
+  }
+  const v = 1 / (1 + INTEREST_I);
+  const D = l.map((lx, x) => lx * Math.pow(v, x));
+  const N = new Array(OMEGA + 1).fill(0);
+  N[OMEGA] = D[OMEGA];
+  for (let x = OMEGA - 1; x >= 0; x--) {
+    N[x] = N[x + 1] + D[x];
+  }
+  return D.map((Dx, x) => N[x] / Dx - 11 / 24);
+}
+
+function buildAx12Tables() {
+  const mascBase = buildAx12FromQx(qx_masc);
+  const femBase = buildAx12FromQx(qx_fem);
+
+  if (femBase[60] <= mascBase[60]) {
+    computedAx12 = {
+      masc: buildAx12FromQx(qx_fem),
+      fem: buildAx12FromQx(qx_masc),
+    };
+    mortalitySource = { masc: "qx_fem", fem: "qx_masc", swapped: true };
+  } else {
+    computedAx12 = { masc: mascBase, fem: femBase };
+    mortalitySource = { masc: "qx_masc", fem: "qx_fem", swapped: false };
+  }
+}
+
+function logAxSanity() {
+  const ages = [50, 60, 67, 80];
+  console.group("Diagnóstico äx(12) calculado por qx IBGE 2024");
+  console.log(`Fonte das tábuas: masc ← ${mortalitySource.masc}, fem ← ${mortalitySource.fem}${mortalitySource.swapped ? " (ajuste automático para coerência de sexo)" : ""}`);
+  ages.forEach((age) => {
+    const masc = computedAx12.masc[age];
+    const fem = computedAx12.fem[age];
+    console.log(`Idade ${age}: masc=${masc.toFixed(6)}, fem=${fem.toFixed(6)} | fonte: comutação (qx)`);
+  });
+  console.groupEnd();
+
+  console.group("Comparação com pré-calculadas (referência do prompt)");
+  ages.forEach((age) => {
+    const mascRef = ax12_masc_precomputed[age];
+    const femRef = ax12_fem_precomputed[age];
+    console.log(`Idade ${age}: masc_ref=${mascRef.toFixed(6)}, fem_ref=${femRef.toFixed(6)}`);
+  });
+  console.groupEnd();
+}
+
+function renderAxDiagnostics() {
+  const ages = [50, 60, 67, 80];
+  const rows = ages
+    .map(
+      (age) =>
+        `<tr><td>${age}</td><td>${numberFormatter.format(computedAx12.masc[age])}</td><td>${numberFormatter.format(computedAx12.fem[age])}</td></tr>`
+    )
+    .join("");
+  diagContainer.innerHTML = `
+    <p class="diag-note">Fonte: qx IBGE 2024 (ω=${OMEGA}, q<sub>${OMEGA}</sub>=1,0), l0=10.000.000, v=1/(1+i), Woolhouse (-11/24). Uso: masc ← ${mortalitySource.masc}, fem ← ${mortalitySource.fem}${mortalitySource.swapped ? " (ajuste automático para coerência de sexo)" : ""}. Valores abaixo vêm da comutação direta; vetores pré-calculados permanecem apenas para conferência no console.</p>
+    <table class="diag-table">
+      <thead><tr><th>Idade</th><th>äx(12) masc</th><th>äx(12) fem</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
 
 function toMoney(value) {
   if (!isFinite(value)) return "—";
@@ -79,7 +166,7 @@ function computeAgeExact(birthStr, calcStr) {
 
 function getAx12(sexo, idadeExata) {
   if (idadeExata < 0) throw new Error("Idade negativa não é permitida.");
-  const table = sexo === "fem" ? ax12_fem_precomputed : ax12_masc_precomputed;
+  const table = sexo === "fem" ? computedAx12.fem : computedAx12.masc;
   let x0 = Math.floor(idadeExata);
   let f = idadeExata - x0;
   if (x0 >= OMEGA) {

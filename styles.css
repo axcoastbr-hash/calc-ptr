@@ -160,6 +160,12 @@ code { background: rgba(255,255,255,0.06); padding: 2px 6px; border-radius: 8px;
 
 .rubricas label { font-size: 14px; }
 
+.diag { display: flex; flex-direction: column; gap: 10px; }
+.diag-table { width: 100%; border-collapse: collapse; }
+.diag-table th, .diag-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+.diag-table th { color: var(--muted); font-weight: 700; }
+.diag-note { color: var(--muted); font-size: 14px; }
+
 @media (min-width: 1080px) {
   .result-grid { grid-template-columns: repeat(3, 1fr); }
 }
