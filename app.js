@@ -27,9 +27,6 @@ const auditoriaBox = document.getElementById("auditoria");
 const parecerBox = document.getElementById("parecer");
 const diagContainer = document.getElementById("axDiag");
 
-let computedAx12 = { masc: [], fem: [] };
-let mortalitySource = { masc: "qx_masc", fem: "qx_fem", swapped: false };
-
 function initDefaults() {
   const today = new Date();
   const pad = (n) => n.toString().padStart(2, "0");
@@ -37,88 +34,49 @@ function initDefaults() {
 }
 
 initDefaults();
-buildAx12Tables();
-logAxSanity();
 renderAxDiagnostics();
 
-function ensureOmega(qx) {
-  const arr = [...qx];
-  if (arr.length <= OMEGA) {
-    const missing = OMEGA + 1 - arr.length;
-    for (let i = 0; i < missing; i++) arr.push(arr[arr.length - 1] || 1);
-  }
-  arr[OMEGA] = 1.0;
-  return arr;
-}
-
-function buildAx12FromQx(qx) {
-  const q = ensureOmega(qx);
-  const l = new Array(OMEGA + 1).fill(0);
-  l[0] = 10_000_000;
-  for (let x = 1; x <= OMEGA; x++) {
-    l[x] = l[x - 1] * (1 - q[x - 1]);
-  }
-  const v = 1 / (1 + INTEREST_I);
-  const D = l.map((lx, x) => lx * Math.pow(v, x));
-  const N = new Array(OMEGA + 1).fill(0);
-  N[OMEGA] = D[OMEGA];
-  for (let x = OMEGA - 1; x >= 0; x--) {
-    N[x] = N[x + 1] + D[x];
-  }
-  return D.map((Dx, x) => N[x] / Dx - 11 / 24);
-}
-
-function buildAx12Tables() {
-  const mascBase = buildAx12FromQx(qx_masc);
-  const femBase = buildAx12FromQx(qx_fem);
-
-  if (femBase[60] <= mascBase[60]) {
-    computedAx12 = {
-      masc: buildAx12FromQx(qx_fem),
-      fem: buildAx12FromQx(qx_masc),
-    };
-    mortalitySource = { masc: "qx_fem", fem: "qx_masc", swapped: true };
-  } else {
-    computedAx12 = { masc: mascBase, fem: femBase };
-    mortalitySource = { masc: "qx_masc", fem: "qx_fem", swapped: false };
-  }
+function getAx12FromAT2000(sexo, idadeExata) {
+  if (idadeExata < 15) throw new Error("Tabela AT-2000 embutida inicia aos 15 anos.");
+  const sexKey = sexo === "fem" ? "F" : "M";
+  const table = AX12_AT2000[sexKey];
+  const maxAge = 119;
+  const clampedAge = Math.min(idadeExata, maxAge);
+  let x0 = Math.floor(clampedAge);
+  if (x0 < 15) x0 = 15;
+  let x1 = Math.min(x0 + 1, maxAge);
+  const f = x0 >= maxAge ? 0 : clampedAge - x0;
+  const ax0 = table[x0] ?? table[maxAge];
+  const ax1 = table[x1] ?? table[maxAge];
+  const ax12 = ax0 + f * (ax1 - ax0);
+  return { x0, x1, f, ax0, ax1, ax12 };
 }
 
 function logAxSanity() {
-  const ages = [50, 60, 67, 80];
-  console.group("Diagnóstico äx(12) calculado por qx IBGE 2024");
-  console.log(`Fonte das tábuas: masc ← ${mortalitySource.masc}, fem ← ${mortalitySource.fem}${mortalitySource.swapped ? " (ajuste automático para coerência de sexo)" : ""}`);
-  ages.forEach((age) => {
-    const masc = computedAx12.masc[age];
-    const fem = computedAx12.fem[age];
-    console.log(`Idade ${age}: masc=${masc.toFixed(6)}, fem=${fem.toFixed(6)} | fonte: comutação (qx)`);
-  });
-  console.groupEnd();
-
-  console.group("Comparação com pré-calculadas (referência do prompt)");
-  ages.forEach((age) => {
-    const mascRef = ax12_masc_precomputed[age];
-    const femRef = ax12_fem_precomputed[age];
-    console.log(`Idade ${age}: masc_ref=${mascRef.toFixed(6)}, fem_ref=${femRef.toFixed(6)}`);
-  });
+  console.group("Sanidade AT-2000");
+  console.assert(Math.abs(getAx12FromAT2000("masc", 67).ax12 - 18.76) < 1e-6, "AT-2000 masc 67 deve ser 18.76");
+  console.assert(Math.abs(getAx12FromAT2000("fem", 67).ax12 - 20.48) < 1e-6, "AT-2000 fem 67 deve ser 20.48");
   console.groupEnd();
 }
 
 function renderAxDiagnostics() {
   const ages = [50, 60, 67, 80];
   const rows = ages
-    .map(
-      (age) =>
-        `<tr><td>${age}</td><td>${numberFormatter.format(computedAx12.masc[age])}</td><td>${numberFormatter.format(computedAx12.fem[age])}</td></tr>`
-    )
+    .map((age) => {
+      const masc = getAx12FromAT2000("masc", age).ax12;
+      const fem = getAx12FromAT2000("fem", age).ax12;
+      return `<tr><td>${age}</td><td>${numberFormatter.format(masc)}</td><td>${numberFormatter.format(fem)}</td></tr>`;
+    })
     .join("");
   diagContainer.innerHTML = `
-    <p class="diag-note">Fonte: qx IBGE 2024 (ω=${OMEGA}, q<sub>${OMEGA}</sub>=1,0), l0=10.000.000, v=1/(1+i), Woolhouse (-11/24). Uso: masc ← ${mortalitySource.masc}, fem ← ${mortalitySource.fem}${mortalitySource.swapped ? " (ajuste automático para coerência de sexo)" : ""}. Valores abaixo vêm da comutação direta; vetores pré-calculados permanecem apenas para conferência no console.</p>
+    <p class="diag-note">Fonte: Tabela AT-2000 básica embutida (por sexo, idades 15-119), interpolada pela idade exata.</p>
+    <p class="diag-warn">Sanidade esperada: äx(12) feminino > masculino nas idades típicas (ex.: 50, 60, 67, 80).</p>
     <table class="diag-table">
       <thead><tr><th>Idade</th><th>äx(12) masc</th><th>äx(12) fem</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;
+  logAxSanity();
 }
 
 function toMoney(value) {
@@ -166,17 +124,7 @@ function computeAgeExact(birthStr, calcStr) {
 
 function getAx12(sexo, idadeExata) {
   if (idadeExata < 0) throw new Error("Idade negativa não é permitida.");
-  const table = sexo === "fem" ? computedAx12.fem : computedAx12.masc;
-  let x0 = Math.floor(idadeExata);
-  let f = idadeExata - x0;
-  if (x0 >= OMEGA) {
-    x0 = OMEGA;
-    f = 0;
-  }
-  const ax0 = table[Math.min(x0, table.length - 1)];
-  const ax1 = table[Math.min(x0 + 1, table.length - 1)];
-  const interp = ax0 + f * (ax1 - ax0);
-  return { x0, f, ax0, ax1, ax12: interp };
+  return getAx12FromAT2000(sexo, idadeExata);
 }
 
 function computeFatcor(baseComp, finalComp) {
@@ -226,13 +174,13 @@ function fillAuditoria(data) {
     lines.push(`Benefício líquido estimado: ${toMoney(data.beneficioLiquidoEstimado)} (diferença ${toMoney(data.divergenciaLiquido)})`);
   }
   lines.push("=== Premissas Fixas ===");
-  lines.push("NSUA = 13; FCB = 0,9818; i = 4,44% a.a.; crescimento real = 0%; mortalidade: IBGE 2024 qx por sexo; FATCOR via INPC embutido");
+  lines.push("NSUA = 13; FCB = 0,9818; i = 4,44% a.a.; crescimento real = 0%; äx(12) pela Tabela AT-2000 básica (por sexo, idades 15-119), interpolada; FATCOR via INPC embutido");
   lines.push("=== Cálculo do INPC (FATCOR) ===");
   lines.push(`Competência final: ${data.competenciaFinal}`);
   lines.push(`Índice base: ${data.inpc.idxBase.toFixed(6)} | Índice final: ${data.inpc.idxFinal.toFixed(6)}`);
   lines.push(`FATCOR = ${numberFormatter.format(data.inpc.fatcor)}`);
   lines.push("=== Cálculo do äx(12) ===");
-  lines.push(`ax[x0]=${numberFormatter.format(data.ax.ax0)}, ax[x0+1]=${numberFormatter.format(data.ax.ax1)}, interpolado=${numberFormatter.format(data.ax.ax12)}`);
+  lines.push(`Tabela AT-2000 (${data.sexo === "fem" ? "F" : "M"}), x0=${data.ax.x0}, x1=${data.ax.x1}, f=${data.ax.f.toFixed(4)}, ax[x0]=${numberFormatter.format(data.ax.ax0)}, ax[x1]=${numberFormatter.format(data.ax.ax1)}, interpolado=${numberFormatter.format(data.ax.ax12)}`);
   lines.push("=== Fórmula e Resultados ===");
   lines.push(`K = NSUA × äx(12) × FCB × FATCOR = ${numberFormatter.format(data.k)}`);
   lines.push(`VAEBA BRUTA = ${toMoney(data.vaebaBruta)}`);
@@ -250,9 +198,8 @@ function buildParecer(data, alertas) {
   linhas.push("");
   linhas.push("2. METODOLOGIA E PREMISSAS");
   linhas.push("- NSUA = 13 suplementações anuais; FCB = 0,9818; taxa real i = 4,44% a.a.; crescimento real do benefício = 0%.");
-  linhas.push("- Mortalidade: tábua IBGE 2024 por sexo (ω=90; q90=1,0).");
+  linhas.push("- äx(12) pela Tabela AT-2000 básica embutida, segregada por sexo (idades 15-119), com interpolação linear pela idade exata.");
   linhas.push("- Correção monetária: INPC embutido; FATCOR = índice(final)/índice(base).");
-  linhas.push("- Fator atuarial äx(12) obtido por funções de comutação (l0=10.000.000, v=1/(1+i), Dx, Nx) com aproximação de Woolhouse (-11/24) e interpolação pela idade exata.");
   linhas.push("- Fórmula: VAEBA = NSUA × SUP × äx(12) × FCB × FATCOR.");
   linhas.push("");
   linhas.push("3. DADOS DE ENTRADA");
@@ -279,7 +226,7 @@ function buildParecer(data, alertas) {
   }
   linhas.push("");
   linhas.push("6. CONSIDERAÇÕES FINAIS");
-  linhas.push("Cálculo estimativo offline com base na tábua IBGE 2024 (ω=90) e série INPC embutida (1994-01 a 2025-11), considerando premissas atuariais fixas do PPSP-NR.");
+  linhas.push("Cálculo estimativo offline com base na Tabela AT-2000 básica embutida (por sexo) para äx(12) e na série INPC embutida (1994-01 a 2025-11), considerando premissas atuariais fixas do PPSP-NR.");
   linhas.push("Fatores e valores reproduzíveis mediante repetição das mesmas entradas. Recomenda-se auditoria complementar caso novos dados sejam apresentados.");
   parecerBox.value = linhas.join("\n");
 }
