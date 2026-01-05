@@ -90,7 +90,7 @@
           <li><strong>FCB:</strong> 0,9818</li>
           <li><strong>Taxa real de juros:</strong> i = 4,44% a.a.</li>
           <li><strong>Crescimento real do benefício:</strong> 0%</li>
-          <li><strong>äx(12):</strong> Tabela AT-2000 básica embutida (por sexo, idades 15-119), interpolada pela idade exata</li>
+          <li><strong>Mortalidade:</strong> IBGE 2024 (qx por sexo, ω=90, q<sub>90</sub>=1,0)</li>
           <li><strong>Correção monetária:</strong> INPC embutido (1994-01 a 2025-11)</li>
         </ul>
       </div>
@@ -136,14 +136,6 @@
 
       <div class="card">
         <div class="card-header">
-          <h2>Diagnóstico äx(12)</h2>
-          <span class="pill">Sanidade sexo/idade</span>
-        </div>
-        <div id="axDiag" class="diag"></div>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
           <h2>Auditoria do Cálculo</h2>
           <button id="copiarAuditoria" class="ghost small">Copiar Auditoria</button>
         </div>
@@ -161,7 +153,6 @@
   </main>
 
   <script src="data_mortality.js"></script>
-  <script src="data_ax12_at2000.js"></script>
   <script src="data_inpc.js"></script>
   <script src="app.js"></script>
 </body>
