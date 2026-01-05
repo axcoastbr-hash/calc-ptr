@@ -25,10 +25,6 @@ const outK = document.getElementById("fatorK");
 const outAlerts = document.getElementById("alerts");
 const auditoriaBox = document.getElementById("auditoria");
 const parecerBox = document.getElementById("parecer");
-const diagContainer = document.getElementById("axDiag");
-
-let ax12Unisex = [];
-let fechamentoAplicado = false;
 
 function initDefaults() {
   const today = new Date();
@@ -37,82 +33,6 @@ function initDefaults() {
 }
 
 initDefaults();
-buildAx12Tables();
-renderAxDiagnostics();
-
-function buildAx12Tables() {
-  const omega = PETROS_OMEGA;
-  const qx = [];
-  for (let age = PETROS_MIN_AGE; age <= omega; age++) {
-    qx[age] = QX_PETROS_AT[age];
-  }
-  qx[omega] = 1.0;
-  fechamentoAplicado = true;
-
-  const l = [];
-  l[PETROS_MIN_AGE] = 10_000_000;
-  for (let x = PETROS_MIN_AGE + 1; x <= omega; x++) {
-    l[x] = l[x - 1] * (1 - qx[x - 1]);
-  }
-  const v = 1 / (1 + INTEREST_I);
-  const D = [];
-  const N = [];
-  for (let x = PETROS_MIN_AGE; x <= omega; x++) {
-    D[x] = l[x] * Math.pow(v, x);
-  }
-  N[omega] = D[omega];
-  for (let x = omega - 1; x >= PETROS_MIN_AGE; x--) {
-    N[x] = N[x + 1] + D[x];
-  }
-  for (let x = PETROS_MIN_AGE; x <= omega; x++) {
-    ax12Unisex[x] = N[x] / D[x] - 11 / 24;
-  }
-}
-
-function getAx12FromPetros(idadeExata) {
-  if (idadeExata < PETROS_MIN_AGE) {
-    throw new Error("Tábua válida a partir de 18 anos.");
-  }
-  const omega = PETROS_OMEGA;
-  const clampedAge = Math.min(idadeExata, omega);
-  const clamped = idadeExata >= omega;
-  let x0 = Math.floor(clampedAge);
-  if (x0 < PETROS_MIN_AGE) x0 = PETROS_MIN_AGE;
-  const x1 = Math.min(x0 + 1, omega);
-  const f = x0 >= omega ? 0 : clampedAge - x0;
-  const ax0 = ax12Unisex[x0];
-  const ax1 = ax12Unisex[x1];
-  const ax12 = ax0 + f * (ax1 - ax0);
-  return { x0, x1, f, ax0, ax1, ax12, clamped };
-}
-
-function logAxSanity() {
-  console.group("Sanidade PETROS AT Ordinária");
-  const axMasc = getAx12FromPetros(67).ax12;
-  const axFem = getAx12FromPetros(67).ax12;
-  console.assert(Math.abs(axMasc - axFem) < 1e-10, "Tábua unissex: masculino e feminino devem ser iguais na idade 67.");
-  console.groupEnd();
-}
-
-function renderAxDiagnostics() {
-  const ages = [50, 60, 67, 80];
-  const rows = ages
-    .map((age) => {
-      const masc = getAx12FromPetros(age).ax12;
-      const fem = getAx12FromPetros(age).ax12;
-      return `<tr><td>${age}</td><td>${numberFormatter.format(masc)}</td><td>${numberFormatter.format(fem)}</td></tr>`;
-    })
-    .join("");
-  diagContainer.innerHTML = `
-    <p class="diag-note">Fonte: Tábua PETROS AT Ordinária (qx unissex), comutação + Woolhouse (−11/24), ω=115, fechamento técnico em 115.</p>
-    <p class="diag-warn">Sanidade esperada: äx(12) masculino = feminino (tábua unissex).</p>
-    <table class="diag-table">
-      <thead><tr><th>Idade</th><th>äx(12) masc</th><th>äx(12) fem</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `;
-  logAxSanity();
-}
 
 function toMoney(value) {
   if (!isFinite(value)) return "—";
@@ -159,7 +79,17 @@ function computeAgeExact(birthStr, calcStr) {
 
 function getAx12(sexo, idadeExata) {
   if (idadeExata < 0) throw new Error("Idade negativa não é permitida.");
-  return getAx12FromPetros(idadeExata);
+  const table = sexo === "fem" ? ax12_fem_precomputed : ax12_masc_precomputed;
+  let x0 = Math.floor(idadeExata);
+  let f = idadeExata - x0;
+  if (x0 >= OMEGA) {
+    x0 = OMEGA;
+    f = 0;
+  }
+  const ax0 = table[Math.min(x0, table.length - 1)];
+  const ax1 = table[Math.min(x0 + 1, table.length - 1)];
+  const interp = ax0 + f * (ax1 - ax0);
+  return { x0, f, ax0, ax1, ax12: interp };
 }
 
 function computeFatcor(baseComp, finalComp) {
@@ -209,17 +139,13 @@ function fillAuditoria(data) {
     lines.push(`Benefício líquido estimado: ${toMoney(data.beneficioLiquidoEstimado)} (diferença ${toMoney(data.divergenciaLiquido)})`);
   }
   lines.push("=== Premissas Fixas ===");
-  lines.push("NSUA = 13; FCB = 0,9818; i = 4,44% a.a.; crescimento real = 0%; äx(12) pela Tábua PETROS AT Ordinária (qx unissex), comutação + Woolhouse (−11/24), ω=115; FATCOR via INPC embutido");
-  lines.push(`Fechamento técnico aplicado: qx(115)=1,0 (original ${QX_PETROS_115_RAW.toFixed(5)}).`);
+  lines.push("NSUA = 13; FCB = 0,9818; i = 4,44% a.a.; crescimento real = 0%; mortalidade: IBGE 2024 qx por sexo; FATCOR via INPC embutido");
   lines.push("=== Cálculo do INPC (FATCOR) ===");
   lines.push(`Competência final: ${data.competenciaFinal}`);
   lines.push(`Índice base: ${data.inpc.idxBase.toFixed(6)} | Índice final: ${data.inpc.idxFinal.toFixed(6)}`);
   lines.push(`FATCOR = ${numberFormatter.format(data.inpc.fatcor)}`);
   lines.push("=== Cálculo do äx(12) ===");
-  lines.push(`Tábua PETROS AT Ordinária (unissex), x0=${data.ax.x0}, x1=${data.ax.x1}, f=${data.ax.f.toFixed(4)}, ax[x0]=${numberFormatter.format(data.ax.ax0)}, ax[x1]=${numberFormatter.format(data.ax.ax1)}, interpolado=${numberFormatter.format(data.ax.ax12)}`);
-  if (data.ax.clamped) {
-    lines.push(`Idade >= ${PETROS_OMEGA}: aplicado clamp em ${PETROS_OMEGA} com f=0.`);
-  }
+  lines.push(`ax[x0]=${numberFormatter.format(data.ax.ax0)}, ax[x0+1]=${numberFormatter.format(data.ax.ax1)}, interpolado=${numberFormatter.format(data.ax.ax12)}`);
   lines.push("=== Fórmula e Resultados ===");
   lines.push(`K = NSUA × äx(12) × FCB × FATCOR = ${numberFormatter.format(data.k)}`);
   lines.push(`VAEBA BRUTA = ${toMoney(data.vaebaBruta)}`);
@@ -237,8 +163,9 @@ function buildParecer(data, alertas) {
   linhas.push("");
   linhas.push("2. METODOLOGIA E PREMISSAS");
   linhas.push("- NSUA = 13 suplementações anuais; FCB = 0,9818; taxa real i = 4,44% a.a.; crescimento real do benefício = 0%.");
-  linhas.push("- äx(12) apurado pela Tábua PETROS AT Ordinária (qx unissex), via comutação e ajuste de Woolhouse (−11/24), com interpolação linear pela idade exata.");
+  linhas.push("- Mortalidade: tábua IBGE 2024 por sexo (ω=90; q90=1,0).");
   linhas.push("- Correção monetária: INPC embutido; FATCOR = índice(final)/índice(base).");
+  linhas.push("- Fator atuarial äx(12) obtido por funções de comutação (l0=10.000.000, v=1/(1+i), Dx, Nx) com aproximação de Woolhouse (-11/24) e interpolação pela idade exata.");
   linhas.push("- Fórmula: VAEBA = NSUA × SUP × äx(12) × FCB × FATCOR.");
   linhas.push("");
   linhas.push("3. DADOS DE ENTRADA");
@@ -265,7 +192,7 @@ function buildParecer(data, alertas) {
   }
   linhas.push("");
   linhas.push("6. CONSIDERAÇÕES FINAIS");
-  linhas.push("Cálculo estimativo offline com base na Tábua PETROS AT Ordinária (qx unissex, ω=115, fechamento técnico aplicado) para äx(12) e na série INPC embutida (1994-01 a 2025-11), considerando premissas atuariais fixas do PPSP-NR.");
+  linhas.push("Cálculo estimativo offline com base na tábua IBGE 2024 (ω=90) e série INPC embutida (1994-01 a 2025-11), considerando premissas atuariais fixas do PPSP-NR.");
   linhas.push("Fatores e valores reproduzíveis mediante repetição das mesmas entradas. Recomenda-se auditoria complementar caso novos dados sejam apresentados.");
   parecerBox.value = linhas.join("\n");
 }
