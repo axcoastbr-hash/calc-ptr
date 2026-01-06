@@ -26,6 +26,8 @@ const outAlerts = document.getElementById("alerts");
 const auditoriaBox = document.getElementById("auditoria");
 const parecerBox = document.getElementById("parecer");
 
+let ax12Tables = { masc: [], fem: [] };
+
 function initDefaults() {
   const today = new Date();
   const pad = (n) => n.toString().padStart(2, "0");
@@ -33,6 +35,8 @@ function initDefaults() {
 }
 
 initDefaults();
+buildAx12Tables();
+debugAx12Sanity();
 
 function toMoney(value) {
   if (!isFinite(value)) return "—";
@@ -77,19 +81,58 @@ function computeAgeExact(birthStr, calcStr) {
   return ageYears;
 }
 
+function buildAx12Table(qx) {
+  if (qx.length - 1 < OMEGA) throw new Error("Tábua biométrica incompleta para o omega definido.");
+  const qxLocal = [...qx];
+  qxLocal[OMEGA] = 1.0;
+  const l = new Array(OMEGA + 1).fill(0);
+  l[0] = 10_000_000;
+  for (let x = 1; x <= OMEGA; x++) {
+    l[x] = l[x - 1] * (1 - qxLocal[x - 1]);
+  }
+  const v = 1 / (1 + INTEREST_I);
+  const D = l.map((lx, x) => lx * Math.pow(v, x));
+  const N = new Array(OMEGA + 1).fill(0);
+  N[OMEGA] = D[OMEGA];
+  for (let x = OMEGA - 1; x >= 0; x--) {
+    N[x] = N[x + 1] + D[x];
+  }
+  return D.map((Dx, x) => {
+    if (Dx === 0) throw new Error("D[x] = 0 na comutação. Verifique qx/omega.");
+    return N[x] / Dx - 11 / 24;
+  });
+}
+
+function buildAx12Tables() {
+  ax12Tables = {
+    masc: buildAx12Table(qx_at2000_suav_masc),
+    fem: buildAx12Table(qx_at2000_suav_fem),
+  };
+}
+
+function debugAx12Sanity() {
+  const age = 58;
+  const axFem = ax12Tables.fem[age];
+  const axMasc = ax12Tables.masc[age];
+  if (axFem <= axMasc) {
+    console.warn("Sanidade AT-2000 Suavizada: feminino <= masculino na idade", age);
+    console.warn("tábua fem qx[0..4]", qx_at2000_suav_fem.slice(0, 5));
+    console.warn("tábua masc qx[0..4]", qx_at2000_suav_masc.slice(0, 5));
+    console.warn("ax12_int fem", axFem, "ax12_int masc", axMasc);
+  }
+}
+
 function getAx12(sexo, idadeExata) {
   if (idadeExata < 0) throw new Error("Idade negativa não é permitida.");
-  const table = sexo === "fem" ? ax12_fem_precomputed : ax12_masc_precomputed;
+  if (idadeExata >= OMEGA) throw new Error("Idade fora do limite da tábua AT-2000 Suavizada (ω=115).");
+  const table = sexo === "fem" ? ax12Tables.fem : ax12Tables.masc;
   let x0 = Math.floor(idadeExata);
   let f = idadeExata - x0;
-  if (x0 >= OMEGA) {
-    x0 = OMEGA;
-    f = 0;
-  }
+  const x1 = x0 + 1;
   const ax0 = table[Math.min(x0, table.length - 1)];
-  const ax1 = table[Math.min(x0 + 1, table.length - 1)];
+  const ax1 = table[Math.min(x1, table.length - 1)];
   const interp = ax0 + f * (ax1 - ax0);
-  return { x0, f, ax0, ax1, ax12: interp };
+  return { x0, x1, f, ax0, ax1, ax12: interp };
 }
 
 function computeFatcor(baseComp, finalComp) {
@@ -139,13 +182,14 @@ function fillAuditoria(data) {
     lines.push(`Benefício líquido estimado: ${toMoney(data.beneficioLiquidoEstimado)} (diferença ${toMoney(data.divergenciaLiquido)})`);
   }
   lines.push("=== Premissas Fixas ===");
-  lines.push("NSUA = 13; FCB = 0,9818; i = 4,44% a.a.; crescimento real = 0%; mortalidade: IBGE 2024 qx por sexo; FATCOR via INPC embutido");
+  lines.push("NSUA = 13; FCB = 0,9818; i = 4,44% a.a.; crescimento real = 0%; äx(12) calculado pela Tábua AT-2000 Suavizada (qx) por sexo, idades 0–115, via comutação e Woolhouse; FATCOR via INPC embutido");
   lines.push("=== Cálculo do INPC (FATCOR) ===");
   lines.push(`Competência final: ${data.competenciaFinal}`);
   lines.push(`Índice base: ${data.inpc.idxBase.toFixed(6)} | Índice final: ${data.inpc.idxFinal.toFixed(6)}`);
   lines.push(`FATCOR = ${numberFormatter.format(data.inpc.fatcor)}`);
   lines.push("=== Cálculo do äx(12) ===");
-  lines.push(`ax[x0]=${numberFormatter.format(data.ax.ax0)}, ax[x0+1]=${numberFormatter.format(data.ax.ax1)}, interpolado=${numberFormatter.format(data.ax.ax12)}`);
+  lines.push(`Sexo: ${data.sexo === "fem" ? "Feminino" : "Masculino"} | x0=${data.ax.x0}, x1=${data.ax.x1}, f=${data.ax.f.toFixed(4)}`);
+  lines.push(`ax12_int[x0]=${numberFormatter.format(data.ax.ax0)}, ax12_int[x1]=${numberFormatter.format(data.ax.ax1)}, interpolado=${numberFormatter.format(data.ax.ax12)}`);
   lines.push("=== Fórmula e Resultados ===");
   lines.push(`K = NSUA × äx(12) × FCB × FATCOR = ${numberFormatter.format(data.k)}`);
   lines.push(`VAEBA BRUTA = ${toMoney(data.vaebaBruta)}`);
@@ -163,9 +207,9 @@ function buildParecer(data, alertas) {
   linhas.push("");
   linhas.push("2. METODOLOGIA E PREMISSAS");
   linhas.push("- NSUA = 13 suplementações anuais; FCB = 0,9818; taxa real i = 4,44% a.a.; crescimento real do benefício = 0%.");
-  linhas.push("- Mortalidade: tábua IBGE 2024 por sexo (ω=90; q90=1,0).");
+  linhas.push("- äx(12) calculado pela Tábua AT-2000 Suavizada (qx), por sexo, idades 0–115, via comutação (D/N) e ajuste de Woolhouse (−11/24), com interpolação pela idade exata.");
   linhas.push("- Correção monetária: INPC embutido; FATCOR = índice(final)/índice(base).");
-  linhas.push("- Fator atuarial äx(12) obtido por funções de comutação (l0=10.000.000, v=1/(1+i), Dx, Nx) com aproximação de Woolhouse (-11/24) e interpolação pela idade exata.");
+  linhas.push("- Fator atuarial äx(12) obtido por comutação (l0=10.000.000, v=1/(1+i), Dx, Nx) e interpolação linear pela idade exata.");
   linhas.push("- Fórmula: VAEBA = NSUA × SUP × äx(12) × FCB × FATCOR.");
   linhas.push("");
   linhas.push("3. DADOS DE ENTRADA");
@@ -192,7 +236,7 @@ function buildParecer(data, alertas) {
   }
   linhas.push("");
   linhas.push("6. CONSIDERAÇÕES FINAIS");
-  linhas.push("Cálculo estimativo offline com base na tábua IBGE 2024 (ω=90) e série INPC embutida (1994-01 a 2025-11), considerando premissas atuariais fixas do PPSP-NR.");
+  linhas.push("Cálculo estimativo offline com base na Tábua AT-2000 Suavizada (qx por sexo, ω=115) e série INPC embutida (1994-01 a 2025-11), considerando premissas atuariais fixas do PPSP-NR.");
   linhas.push("Fatores e valores reproduzíveis mediante repetição das mesmas entradas. Recomenda-se auditoria complementar caso novos dados sejam apresentados.");
   parecerBox.value = linhas.join("\n");
 }
