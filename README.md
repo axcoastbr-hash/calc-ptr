@@ -1,6 +1,6 @@
 # Calculadora de Reserva Matemática Individual (VAEBA) — PPSP-NR
 
-Aplicação estática (HTML/CSS/JS) para apurar a VAEBA individual do plano PPSP-NR (Não Repactuados), operando 100% offline com tábua IBGE 2024 e série INPC embutida.
+Aplicação estática (HTML/CSS/JS) para apurar a VAEBA individual do plano PPSP-NR (Não Repactuados), operando 100% offline com Tábua AT-2000 Suavizada (qx) por sexo e série INPC embutida.
 
 ## Executando localmente
 1. Clone ou baixe este repositório.
@@ -8,7 +8,7 @@ Aplicação estática (HTML/CSS/JS) para apurar a VAEBA individual do plano PPSP
 3. Preencha os dados do participante, datas e valores; clique em **Calcular**.
 
 ## Funcionalidades principais
-- Cálculo automático do fator atuarial subanual äx(12) (Woolhouse) por idade/sexo, interpolado pela idade exata.
+- Cálculo automático do fator atuarial subanual äx(12) pela Tábua AT-2000 Suavizada (qx) por sexo, via comutação + Woolhouse, interpolado pela idade exata.
 - FATCOR via INPC embutido (1994-01 a 2025-11) com possibilidade de upload CSV/JSON para substituição.
 - Apresentação de VAEBA BRUTA e VAEBA AJUSTADA, fator K e auditoria detalhada.
 - Geração de Parecer Técnico Resumido no estilo “Mara” + botões de copiar auditoria/parecer.
@@ -29,3 +29,6 @@ Resultado esperado (aproximação, pois depende da data exata do dia):
 - VAEBA BRUTA ≈ R$ 103.000,00
 
 Repita o exemplo para verificar se a interface está operando corretamente.
+
+## Validação rápida (äx(12) por sexo)
+Para uma idade fixa (ex.: 58), a tábua AT-2000 Suavizada deve indicar äx(12) feminino maior que o masculino na maioria das idades adultas.
