@@ -351,7 +351,6 @@ async function copiar(target, label) {
 }
 
 const PDF_PAGE = { width: 595.28, height: 841.89 };
-const PDF_SCALE = 2;
 const PDF_MARGINS = { top: 140, bottom: 90, left: 60, right: 60 };
 
 function sanitizeFilename(value) {
@@ -435,101 +434,117 @@ function buildLines(parecerText, auditoriaText, includeAuditoria, measureText, m
       style = headingStyle;
     }
     let cleanLine = line;
+    let prefix = "";
     if (line.startsWith("- ")) {
       cleanLine = line.slice(2);
       indent = bulletIndent;
+      prefix = "• ";
     }
-    wrapParagraph(cleanLine, style, maxWidth, indent, measureText).forEach((wrapped) => {
-      lines.push(wrapped);
+    const prefixWidth = prefix ? measureText(prefix, style) : 0;
+    wrapParagraph(cleanLine, style, maxWidth - prefixWidth, indent, measureText).forEach((wrapped, idx) => {
+      const text = idx === 0 ? `${prefix}${wrapped.text}` : wrapped.text;
+      lines.push({ ...wrapped, text });
     });
   });
   return lines;
 }
 
+function escapePdfText(text) {
+  return text.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+}
+
+function paginateLines(lines, pageHeight, marginTop, marginBottom) {
+  const pages = [];
+  let current = [];
+  let cursorY = pageHeight - marginTop;
+
+  lines.forEach((line) => {
+    const lineHeight = line.isSpacer ? line.lineHeight : line.lineHeight;
+    if (line.isSpacer) {
+      cursorY -= lineHeight;
+      return;
+    }
+    if (cursorY - lineHeight < marginBottom) {
+      pages.push(current);
+      current = [];
+      cursorY = pageHeight - marginTop;
+    }
+    const y = cursorY - lineHeight;
+    current.push({ ...line, y });
+    cursorY -= lineHeight;
+  });
+
+  if (current.length) pages.push(current);
+  return pages;
+}
+
+async function renderTimbradoJpeg() {
+  const timbrado = await loadTimbradoImage();
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(PDF_PAGE.width);
+  canvas.height = Math.round(PDF_PAGE.height);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(timbrado, 0, 0, canvas.width, canvas.height);
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+  return { bytes: dataUrlToBytes(dataUrl), width: canvas.width, height: canvas.height };
+}
+
 async function renderParecerPages(parecerText, auditoriaText, includeAuditoria) {
   await document.fonts.ready;
-  const pageWidth = PDF_PAGE.width * PDF_SCALE;
-  const pageHeight = PDF_PAGE.height * PDF_SCALE;
-  const marginLeft = PDF_MARGINS.left * PDF_SCALE;
-  const marginRight = PDF_MARGINS.right * PDF_SCALE;
-  const marginTop = PDF_MARGINS.top * PDF_SCALE;
-  const marginBottom = PDF_MARGINS.bottom * PDF_SCALE;
+  const pageWidth = PDF_PAGE.width;
+  const pageHeight = PDF_PAGE.height;
+  const marginLeft = PDF_MARGINS.left;
+  const marginRight = PDF_MARGINS.right;
+  const marginTop = PDF_MARGINS.top;
+  const marginBottom = PDF_MARGINS.bottom;
   const maxWidth = pageWidth - marginLeft - marginRight;
-  const bulletIndent = 18 * PDF_SCALE;
+  const bulletIndent = 18;
 
   const measureCanvas = document.createElement("canvas");
   const measureCtx = measureCanvas.getContext("2d");
   const measureText = (text, style) => {
-    measureCtx.font = `${style.weight} ${style.size * PDF_SCALE}px "Alegreya Sans", sans-serif`;
+    measureCtx.font = `${style.weight} ${style.size}px "Alegreya Sans", sans-serif`;
     return measureCtx.measureText(text).width;
   };
 
-  const timbrado = await loadTimbradoImage();
   const lines = buildLines(parecerText, auditoriaText, includeAuditoria, measureText, maxWidth, bulletIndent);
-  const pages = [];
-
-  let canvas;
-  let ctx;
-  let cursorY;
-
-  const startPage = () => {
-    canvas = document.createElement("canvas");
-    canvas.width = pageWidth;
-    canvas.height = pageHeight;
-    ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(timbrado, 0, 0, pageWidth, pageHeight);
-    ctx.fillStyle = "#000000";
-    ctx.textBaseline = "top";
-    cursorY = marginTop;
-  };
-
-  const finishPage = () => {
-    if (canvas) pages.push(canvas);
-  };
-
-  startPage();
-
-  lines.forEach((line) => {
-    const lineHeight = line.lineHeight || 16;
-    if (line.isSpacer) {
-      cursorY += lineHeight;
-      return;
-    }
-    if (cursorY + lineHeight > pageHeight - marginBottom) {
-      finishPage();
-      startPage();
-    }
-    ctx.font = `${line.weight} ${line.size * PDF_SCALE}px "Alegreya Sans", sans-serif`;
-    const x = marginLeft + (line.indent || 0);
-    ctx.fillText(line.text, x, cursorY);
-    cursorY += lineHeight;
-  });
-
-  finishPage();
-  return pages.map((page) => {
-    const dataUrl = page.toDataURL("image/jpeg", 0.92);
-    return { bytes: dataUrlToBytes(dataUrl), width: page.width, height: page.height };
-  });
+  const pages = paginateLines(lines, pageHeight, marginTop, marginBottom);
+  return { pages, marginLeft, pageWidth, pageHeight };
 }
 
-function buildPdfFromImages(images) {
+function buildPdfFromLines(pages, background, marginLeft, pageWidth, pageHeight) {
   const encoder = new TextEncoder();
+  const fontRegularObj = 3;
+  const fontBoldObj = 4;
   const objects = [
     { dict: null },
     { dict: null },
+    { dict: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>" },
+    { dict: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>" },
   ];
   const pageObjectNumbers = [];
-  let objectNumber = 3;
+  let objectNumber = 5;
 
-  images.forEach((image, index) => {
+  pages.forEach((pageLines, index) => {
     const imageObjNum = objectNumber++;
     objects.push({
-      dict: `<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.bytes.length} >>`,
-      streamBytes: image.bytes,
+      dict: `<< /Type /XObject /Subtype /Image /Width ${background.width} /Height ${background.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${background.bytes.length} >>`,
+      streamBytes: background.bytes,
     });
-    const content = `q ${PDF_PAGE.width} 0 0 ${PDF_PAGE.height} 0 0 cm /Im${index + 1} Do Q`;
+    const contentLines = [`q ${pageWidth} 0 0 ${pageHeight} 0 0 cm /Im${index + 1} Do Q`, "BT", "0 0 0 rg"];
+    pageLines.forEach((line) => {
+      const fontObj = line.weight >= 600 ? fontBoldObj : fontRegularObj;
+      const size = line.size || 12;
+      const x = marginLeft + (line.indent || 0);
+      const y = line.y;
+      const text = escapePdfText(line.text);
+      contentLines.push(`/${fontObj === fontBoldObj ? "F2" : "F1"} ${size} Tf`);
+      contentLines.push(`1 0 0 1 ${x.toFixed(2)} ${y.toFixed(2)} Tm (${text}) Tj`);
+    });
+    contentLines.push("ET");
+    const content = contentLines.join("\n");
     const contentBytes = encoder.encode(content);
     const contentObjNum = objectNumber++;
     objects.push({
@@ -539,7 +554,7 @@ function buildPdfFromImages(images) {
     const pageObjNum = objectNumber++;
     pageObjectNumbers.push(pageObjNum);
     objects.push({
-      dict: `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PDF_PAGE.width} ${PDF_PAGE.height}] /Resources << /XObject << /Im${index + 1} ${imageObjNum} 0 R >> >> /Contents ${contentObjNum} 0 R >>`,
+      dict: `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 ${fontRegularObj} 0 R /F2 ${fontBoldObj} 0 R >> /XObject << /Im${index + 1} ${imageObjNum} 0 R >> >> /Contents ${contentObjNum} 0 R >>`,
     });
   });
 
@@ -597,8 +612,13 @@ async function baixarParecerPdf() {
   }
   try {
     const includeAuditoria = inputAnexarAuditoria.checked;
-    const pages = await renderParecerPages(parecerBox.value, auditoriaBox.value, includeAuditoria);
-    const pdfBytes = buildPdfFromImages(pages);
+    const { pages, marginLeft, pageWidth, pageHeight } = await renderParecerPages(
+      parecerBox.value,
+      auditoriaBox.value,
+      includeAuditoria,
+    );
+    const background = await renderTimbradoJpeg();
+    const pdfBytes = buildPdfFromLines(pages, background, marginLeft, pageWidth, pageHeight);
     const nome = sanitizeFilename(inputNome.value.trim());
     const filename = `parecer_VAEBA_${nome}_${formatDateForFilename()}.pdf`;
     const blob = new Blob([pdfBytes], { type: "application/pdf" });
