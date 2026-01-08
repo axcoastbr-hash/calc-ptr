@@ -18,6 +18,8 @@ const btnCalcular = document.getElementById("calcular");
 const btnLimpar = document.getElementById("limpar");
 const btnCopiarAuditoria = document.getElementById("copiarAuditoria");
 const btnCopiarParecer = document.getElementById("copiarParecer");
+const btnBaixarParecer = document.getElementById("baixarParecer");
+const inputAnexarAuditoria = document.getElementById("anexarAuditoria");
 
 const outBruta = document.getElementById("vaebaBruta");
 const outAjustada = document.getElementById("vaebaAjustada");
@@ -348,6 +350,271 @@ async function copiar(target, label) {
   setTimeout(() => (label.textContent = prev), 1200);
 }
 
+const PDF_PAGE = { width: 595.28, height: 841.89 };
+const PDF_SCALE = 2;
+const PDF_MARGINS = { top: 140, bottom: 90, left: 60, right: 60 };
+
+function sanitizeFilename(value) {
+  return value.replace(/[^\w\d-]+/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "") || "participante";
+}
+
+function formatDateForFilename(date = new Date()) {
+  const pad = (n) => n.toString().padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function dataUrlToBytes(dataUrl) {
+  const base64 = dataUrl.split(",")[1];
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function loadTimbradoImage() {
+  const response = await fetch("/assets/timbrado.png", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error("Timbrado não encontrado: envie /assets/timbrado.png");
+  }
+  const blob = await response.blob();
+  if ("createImageBitmap" in window) {
+    return await createImageBitmap(blob);
+  }
+  return await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = URL.createObjectURL(blob);
+  });
+}
+
+function wrapParagraph(text, style, maxWidth, indent, measureText) {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines = [];
+  let current = "";
+  words.forEach((word) => {
+    const testLine = current ? `${current} ${word}` : word;
+    const width = measureText(testLine, style);
+    if (width > maxWidth - indent && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = testLine;
+    }
+  });
+  if (current) lines.push(current);
+  return lines.map((line) => ({ text: line, ...style, indent }));
+}
+
+function buildLines(parecerText, auditoriaText, includeAuditoria, measureText, maxWidth, bulletIndent) {
+  const lines = [];
+  const sections = [parecerText];
+  if (includeAuditoria && auditoriaText) {
+    sections.push("", "ANEXO — AUDITORIA DO CÁLCULO", "", auditoriaText);
+  }
+
+  const titleStyle = { size: 14, weight: 700, lineHeight: 20 };
+  const headingStyle = { size: 13, weight: 700, lineHeight: 18 };
+  const bodyStyle = { size: 12, weight: 400, lineHeight: 17 };
+  let isFirstLine = true;
+
+  sections.join("\n").split("\n").forEach((rawLine) => {
+    const line = rawLine.trim();
+    if (!line) {
+      lines.push({ text: "", isSpacer: true, lineHeight: bodyStyle.lineHeight * 0.6 });
+      return;
+    }
+    let style = bodyStyle;
+    let indent = 0;
+    if (isFirstLine) {
+      style = titleStyle;
+      isFirstLine = false;
+    } else if (/^\d+\.\s/.test(line) || line === "ANEXO — AUDITORIA DO CÁLCULO") {
+      style = headingStyle;
+    }
+    let cleanLine = line;
+    if (line.startsWith("- ")) {
+      cleanLine = line.slice(2);
+      indent = bulletIndent;
+    }
+    wrapParagraph(cleanLine, style, maxWidth, indent, measureText).forEach((wrapped) => {
+      lines.push(wrapped);
+    });
+  });
+  return lines;
+}
+
+async function renderParecerPages(parecerText, auditoriaText, includeAuditoria) {
+  await document.fonts.ready;
+  const pageWidth = PDF_PAGE.width * PDF_SCALE;
+  const pageHeight = PDF_PAGE.height * PDF_SCALE;
+  const marginLeft = PDF_MARGINS.left * PDF_SCALE;
+  const marginRight = PDF_MARGINS.right * PDF_SCALE;
+  const marginTop = PDF_MARGINS.top * PDF_SCALE;
+  const marginBottom = PDF_MARGINS.bottom * PDF_SCALE;
+  const maxWidth = pageWidth - marginLeft - marginRight;
+  const bulletIndent = 18 * PDF_SCALE;
+
+  const measureCanvas = document.createElement("canvas");
+  const measureCtx = measureCanvas.getContext("2d");
+  const measureText = (text, style) => {
+    measureCtx.font = `${style.weight} ${style.size * PDF_SCALE}px "Alegreya Sans", sans-serif`;
+    return measureCtx.measureText(text).width;
+  };
+
+  const timbrado = await loadTimbradoImage();
+  const lines = buildLines(parecerText, auditoriaText, includeAuditoria, measureText, maxWidth, bulletIndent);
+  const pages = [];
+
+  let canvas;
+  let ctx;
+  let cursorY;
+
+  const startPage = () => {
+    canvas = document.createElement("canvas");
+    canvas.width = pageWidth;
+    canvas.height = pageHeight;
+    ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(timbrado, 0, 0, pageWidth, pageHeight);
+    ctx.fillStyle = "#000000";
+    ctx.textBaseline = "top";
+    cursorY = marginTop;
+  };
+
+  const finishPage = () => {
+    if (canvas) pages.push(canvas);
+  };
+
+  startPage();
+
+  lines.forEach((line) => {
+    const lineHeight = line.lineHeight || 16;
+    if (line.isSpacer) {
+      cursorY += lineHeight;
+      return;
+    }
+    if (cursorY + lineHeight > pageHeight - marginBottom) {
+      finishPage();
+      startPage();
+    }
+    ctx.font = `${line.weight} ${line.size * PDF_SCALE}px "Alegreya Sans", sans-serif`;
+    const x = marginLeft + (line.indent || 0);
+    ctx.fillText(line.text, x, cursorY);
+    cursorY += lineHeight;
+  });
+
+  finishPage();
+  return pages.map((page) => {
+    const dataUrl = page.toDataURL("image/jpeg", 0.92);
+    return { bytes: dataUrlToBytes(dataUrl), width: page.width, height: page.height };
+  });
+}
+
+function buildPdfFromImages(images) {
+  const encoder = new TextEncoder();
+  const objects = [
+    { dict: null },
+    { dict: null },
+  ];
+  const pageObjectNumbers = [];
+  let objectNumber = 3;
+
+  images.forEach((image, index) => {
+    const imageObjNum = objectNumber++;
+    objects.push({
+      dict: `<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.bytes.length} >>`,
+      streamBytes: image.bytes,
+    });
+    const content = `q ${PDF_PAGE.width} 0 0 ${PDF_PAGE.height} 0 0 cm /Im${index + 1} Do Q`;
+    const contentBytes = encoder.encode(content);
+    const contentObjNum = objectNumber++;
+    objects.push({
+      dict: `<< /Length ${contentBytes.length} >>`,
+      streamBytes: contentBytes,
+    });
+    const pageObjNum = objectNumber++;
+    pageObjectNumbers.push(pageObjNum);
+    objects.push({
+      dict: `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PDF_PAGE.width} ${PDF_PAGE.height}] /Resources << /XObject << /Im${index + 1} ${imageObjNum} 0 R >> >> /Contents ${contentObjNum} 0 R >>`,
+    });
+  });
+
+  objects[1].dict = `<< /Type /Pages /Kids [${pageObjectNumbers.map((n) => `${n} 0 R`).join(" ")}] /Count ${pageObjectNumbers.length} >>`;
+  objects[0].dict = "<< /Type /Catalog /Pages 2 0 R >>";
+
+  const parts = [];
+  const offsets = [0];
+  let offset = 0;
+
+  const pushBytes = (bytes) => {
+    parts.push(bytes);
+    offset += bytes.length;
+  };
+
+  const pushString = (text) => pushBytes(encoder.encode(text));
+
+  pushString("%PDF-1.4\n%");
+  pushBytes(Uint8Array.from([0xe2, 0xe3, 0xcf, 0xd3, 0x0a]));
+
+  objects.forEach((object, index) => {
+    offsets.push(offset);
+    pushString(`${index + 1} 0 obj\n`);
+    if (object.streamBytes) {
+      pushString(`${object.dict}\nstream\n`);
+      pushBytes(object.streamBytes);
+      pushString("\nendstream\nendobj\n");
+    } else {
+      pushString(`${object.dict}\nendobj\n`);
+    }
+  });
+
+  const xrefOffset = offset;
+  pushString(`xref\n0 ${objects.length + 1}\n`);
+  pushString("0000000000 65535 f \n");
+  offsets.slice(1).forEach((objOffset) => {
+    pushString(`${String(objOffset).padStart(10, "0")} 00000 n \n`);
+  });
+  pushString(`trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
+
+  const totalLength = parts.reduce((acc, part) => acc + part.length, 0);
+  const output = new Uint8Array(totalLength);
+  let position = 0;
+  parts.forEach((part) => {
+    output.set(part, position);
+    position += part.length;
+  });
+  return output;
+}
+
+async function baixarParecerPdf() {
+  if (!parecerBox.value) {
+    pushAlert("Gere o parecer antes de baixar o PDF.", "warn");
+    return;
+  }
+  try {
+    const includeAuditoria = inputAnexarAuditoria.checked;
+    const pages = await renderParecerPages(parecerBox.value, auditoriaBox.value, includeAuditoria);
+    const pdfBytes = buildPdfFromImages(pages);
+    const nome = sanitizeFilename(inputNome.value.trim());
+    const filename = `parecer_VAEBA_${nome}_${formatDateForFilename()}.pdf`;
+    const blob = new Blob([pdfBytes], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    pushAlert(err.message || "Erro ao gerar o PDF.", "error");
+  }
+}
+
 async function handleUpload(event) {
   const file = event.target.files?.[0];
   if (!file) return;
@@ -381,6 +648,7 @@ btnCalcular.addEventListener("click", compute);
 btnLimpar.addEventListener("click", limpar);
 btnCopiarAuditoria.addEventListener("click", () => copiar(auditoriaBox, btnCopiarAuditoria));
 btnCopiarParecer.addEventListener("click", () => copiar(parecerBox, btnCopiarParecer));
+btnBaixarParecer.addEventListener("click", baixarParecerPdf);
 uploadInput.addEventListener("change", handleUpload);
 
 // Sanidade de dados INPC para informação de auditoria
