@@ -13,6 +13,12 @@ Aplicação estática (HTML/CSS/JS) para apurar a VAEBA individual do plano PPSP
 - Apresentação de VAEBA BRUTA e VAEBA AJUSTADA, fator K e auditoria detalhada.
 - Geração de Parecer Técnico Resumido no estilo “Mara” + botões de copiar auditoria/parecer.
 - Validação de divergência do benefício líquido informado e reset rápido dos campos.
+- Exportação do parecer em PDF A4 timbrado (com opção de anexar a auditoria).
+
+## Timbrado do PDF
+1. Substitua o arquivo `assets/timbrado.png` pelo timbrado desejado (A4 retrato).
+2. Mantenha a imagem com espaço em branco suficiente para a área útil do texto.
+3. Caso o timbrado não exista, a aplicação exibirá o aviso: “Timbrado não encontrado: envie /assets/timbrado.png”.
 
 ## Exemplo preenchido
 - Nome: João de Souza
