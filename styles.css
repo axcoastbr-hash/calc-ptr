@@ -140,6 +140,28 @@ button.small { padding: 8px 12px; }
 button:hover { transform: translateY(-1px); box-shadow: 0 10px 20px rgba(0,0,0,0.3); }
 button:active { transform: translateY(0); }
 
+.parecer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.checkbox input {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+}
+
 .result-grid {
   display: grid;
   grid-template-columns: 1fr;
